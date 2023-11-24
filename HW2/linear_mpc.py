@@ -31,8 +31,17 @@ class LinearMPC:
         S, M = None, None
 
         # --- Your code here
+        S = np.kron(np.eye(self.H), self.B)
 
+        S = np.zeros((self.H * self.dx, self.H * self.du))
+        M = np.zeros((self.H * self.dx, self.dx))
 
+        for i in range(self.H-1):
+            for j in range(i, self.H-1):
+                S[(j+1) * self.dx : (j + 2) * self.dx, i * self.du : (i + 1) * self.du] = np.linalg.matrix_power(self.A, j +1 - i) @ self.B
+
+        for i in range(self.H):
+            M[i * self.dx : (i + 1) * self.dx, :] = np.linalg.matrix_power(self.A, i+1)
 
         # ---
         return S, M
@@ -56,9 +65,9 @@ class LinearMPC:
         G0 = None
 
         # --- Your code here
+        G = -np.linalg.inv((S.T @ Qbar @ S + Rbar)) @ S.T @ Qbar @ M
 
-
-
+        G0 = G[:self.du,:]
         # ---
 
         return G0
@@ -75,7 +84,7 @@ class LinearMPC:
 
         # --- Your code here
 
-
+        Ginf = -np.linalg.inv(self.R + self.B.T @ theta_T_theta @ self.B) @ self.B.T @ theta_T_theta @ self.A
 
         # ---
         return Ginf
@@ -99,7 +108,17 @@ class LinearMPC:
         U = None
         # --- Your code here
 
+        U = cp.Variable((self.H, self.du))
 
+        cost = cp.quad_form(S @ U + M @ x0.reshape((-1,1)), Qbar) + cp.quad_form(U, Rbar)
+
+        constraints = [U <= u_max, u_min <= U]
+
+        problem = cp.Problem(cp.Minimize(cost), constraints)
+
+        problem.solve()
+
+        U = U.value
 
         # ---
 
@@ -124,9 +143,21 @@ class LinearMPC:
         X, U = None, None
 
         # --- Your code here
+        X = cp.Variable((self.H+1, self.dx))
+        U = cp.Variable((self.H, self.du))
 
+        cost = cp.sum(cp.sum_squares(X @ np.sqrt(self.Q.T)) + cp.sum_squares(U @ np.sqrt(self.R.T)))
 
+        constraints = [X[0] == x0]
+        constraints += [X[t+1] == self.A @ X[t] + self.B @ U[t] for t in range(self.H)]
+        constraints += [u_min <= U, U <= u_max]
+        problem = cp.Problem(cp.Minimize(cost), constraints)
+        problem.solve()
 
+        U = U.value
+        X = X.value
+
+ 
         # ---
 
         return U, X

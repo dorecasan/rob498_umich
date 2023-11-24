@@ -104,6 +104,31 @@ class CartpoleEnv(BaseEnv):
                                                         aspect=self.render_w / self.render_h,
                                                         nearVal=0.1,
                                                         farVal=100.0)
+    def dynamics(self,state,control):
+          next_state = None
+          dt = 0.05
+          g = 9.81
+          mc = 1
+          mp = 0
+          l = 0.5
+
+          x_t, theta_t, dx_t, dtheta_t = np.split(state,4, axis=0)
+          F = control
+
+          ddtheta_t = (g*np.sin(theta_t)-np.cos(theta_t)  \
+                    *(F+mp*l*dtheta_t**2*np.sin(theta_t))/(mc+mp))/  \
+                    (l*(4/3-(mp*np.cos(theta_t)**2)/(mc+mp)))
+          ddx_t = (F + mp*l*(dtheta_t**2*np.sin(theta_t) - ddtheta_t*np.cos(theta_t)))/(mc+mp)
+
+          dx_t1 = dx_t + dt*ddx_t
+          dtheta_t1 = dtheta_t + dt * ddtheta_t
+
+          x_t1 = x_t + dt*dx_t1
+          theta_t1 = theta_t + dt*dtheta_t1
+          next_state = np.concatenate([x_t1, theta_t1, dx_t1, dtheta_t1], axis=0)
+          
+          return next_state.reshape((-1,1))
+
 
     def linearize_numerical(self, state, control, eps=1e-3):
         """
@@ -116,10 +141,28 @@ class CartpoleEnv(BaseEnv):
             A: np.array of shape (4, 4) representing Jacobian df/dx for dynamics f
             B: np.array of shape (4, 1) representing Jacobian df/du for dynamics f
         """
-        A, B = None, None
+        A, B = [], []
         # --- Your code here
+        n = state.size
+        m = control.size
+        C = np.eye(n)
+        D = np.eye(m)
+        for i in range(n):
+          state_plus_eps = self.dynamics(state + eps*C[i], control)
+          state_minus_eps = self.dynamics(state - eps*C[i], control)
 
+          df = (state_plus_eps - state_minus_eps)/(2*eps)
+          A.append(df)
 
+        for i in range(m):
+          control_plus_eps = self.dynamics(state, control + eps*D[i])
+          control_minus_eps = self.dynamics(state, control - eps*D[i])
+
+          df = (control_plus_eps - control_minus_eps)/(2*eps)
+          B.append(df)
+
+        A = np.concatenate(A,axis = 1)
+        B = np.concatenate(B,axis = 0)
 
         # ---
         return A, B
@@ -141,13 +184,26 @@ def dynamics_analytic(state, action):
     dt = 0.05
     g = 9.81
     mc = 1
-    mp = 0.1
+    mp = 0
     l = 0.5
 
     # --- Your code here
 
+    x_t, theta_t, dx_t, dtheta_t = torch.chunk(input = state, chunks =4,dim=1)
+    F = action
 
+    ddtheta_t = (g*torch.sin(theta_t)-torch.cos(theta_t)  \
+              *(F+mp*l*dtheta_t**2*torch.sin(theta_t))/(mc+mp))/  \
+              (l*(4/3-(mp*torch.cos(theta_t)**2)/(mc+mp)))
+    ddx_t = (F + mp*l*(dtheta_t**2*torch.sin(theta_t) - ddtheta_t*torch.cos(theta_t)))/(mc+mp)
 
+    dx_t1 = dx_t + dt*ddx_t
+    dtheta_t1 = dtheta_t + dt * ddtheta_t
+
+    x_t1 = x_t + dt*dx_t1
+    theta_t1 = theta_t + dt*dtheta_t1
+
+    next_state = torch.cat([x_t1, theta_t1, dx_t1, dtheta_t1], dim=1)
     # ---
 
     return next_state
@@ -165,9 +221,21 @@ def linearize_pytorch(state, control):
         B: torch.tensor of shape (4, 1) representing Jacobian df/du for dynamics f
 
     """
-    A, B = None, None
+    A, B = [], []
     # --- Your code here
-
+    state = torch.unsqueeze(state,dim = 0)
+    control = torch.unsqueeze(control,dim = 0)
+    state.requires_grad = True
+    control.requires_grad =True
+    outputs = dynamics_analytic(state, control)
+    outputs = torch.squeeze(outputs,dim=0)
+    for i in range(outputs.shape[-1]):
+      output_grad = torch.autograd.grad(outputs[i],(state,control),create_graph=True)
+      A.append(output_grad[0])
+      B.append(output_grad[1])
+    print(A)
+    A = torch.concatenate(A,dim = 0)
+    B = torch.concatenate(B,dim=0)
 
 
     # ---

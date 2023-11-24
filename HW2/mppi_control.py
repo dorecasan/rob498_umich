@@ -18,7 +18,9 @@ def get_cartpole_mppi_hyperparams():
         'noise_sigma': None,
     }
     # --- Your code here
-
+    hyperparams['lambda'] = 0.5
+    hyperparams['Q'] = torch.diag(torch.tensor([1,1,0.5,0.5]))
+    hyperparams['noise_sigma'] = 0.3*torch.eye(1)
 
 
     # ---
@@ -41,8 +43,9 @@ def get_panda_mppi_hyperparams():
         'noise_sigma': None,
     }
     # --- Your code here
-
-
+    hyperparams['lambda'] = 0.5
+    hyperparams['Q'] = 50*torch.eye(state_size)
+    hyperparams['noise_sigma'] = 0.9*torch.eye(action_size)
 
     # ---
     return hyperparams
@@ -112,11 +115,16 @@ class MPPIController(object):
          TIP 2: At most you need only 1 for loop.
         """
         state = state_0.unsqueeze(0).repeat(self.K, 1) # transform it to (K, state_size)
-        trajectory = None
+        trajectory = []
         # --- Your code here
+        next_state = state
+  
+        for i in range(self.T):
+          next_state = self._dynamics(next_state, actions[:,i])
+          trajectory.append(next_state)
 
-
-
+        trajectory = torch.stack(trajectory, dim = 1)
+  
         # ---
         return trajectory
 
@@ -138,8 +146,17 @@ class MPPIController(object):
         total_trajectory_cost = None
         # --- Your code here
 
+        state_error = trajectory - self.goal_state
+        total_trajectory_cost = []
+        for i in range(self.K):
+          state_error_k = state_error[i]
+          perturbation_k = perturbations[i]
+          state_cost = torch.trace(state_error_k @ self.Q @ state_error_k.T)
+          action_cost = torch.trace(self.U @ self.noise_sigma_inv @ perturbation_k.T)
+          trajectory_cost = state_cost + self.lambda_ * action_cost
+          total_trajectory_cost.append(trajectory_cost)
 
-
+        total_trajectory_cost = torch.tensor(total_trajectory_cost)
         # ---
         return total_trajectory_cost
 
@@ -154,7 +171,11 @@ class MPPIController(object):
         """
         # --- Your code here
 
-
+        beta = torch.min(trajectory_costs)
+        gamma = torch.exp(-1/self.lambda_*(trajectory_costs - beta))
+        eta = torch.sum(gamma)
+        omega = 1/eta*gamma
+        self.U += torch.sum(perturbations * omega[:,None,None], dim = 0)
 
         # ---
 
