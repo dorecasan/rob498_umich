@@ -8,5 +8,5 @@ HW3
 ![](https://github.com/dorecasan/rob498_umich/blob/main/HW3/pushing_visualization_obstacle2.gif)
 
 HW4
-![](https://github.com/dorecasan/rob498_umich/blob/main/HW4/pushing_visualization_obstacle.gif)
+![](https://github.com/dorecasan/rob498_umich/blob/main/HW4/pushing_visualization.gif)
 
