@@ -50,8 +50,12 @@ class SingleStepDynamicsDataset(Dataset):
             'next_state': None,
         }
         # --- Your code here
+        traj_idx = item // self.trajectory_length
+        time_idx = item % self.trajectory_length
 
-
+        sample['state'] = self.data[traj_idx]['states'][time_idx]
+        sample['action'] = self.data[traj_idx]['actions'][time_idx]
+        sample['next_state'] = self.data[traj_idx]['states'][time_idx+1]
 
         # ---
         return sample
@@ -68,8 +72,11 @@ class MultitaskGPModel(gpytorch.models.ExactGP):
         self.mean_module = None
         self.covar_module = None
         # --- Your code here
-
-
+        batch_shape = torch.Size([2])
+        self.mean_module  = ResidualMean(batch_shape)
+        self.covar_module = gpytorch.kernels.ScaleKernel(
+                            gpytorch.kernels.RBFKernel(batch_shape=batch_shape,ard_num_dims=5),
+                            batch_shape = batch_shape)
 
         # ---
 
@@ -158,9 +165,8 @@ class ResidualMean(gpytorch.means.Mean):
         """
         mean = None
         # --- Your code here
-
-
-
+        dx = 2
+        mean = torch.transpose(input[:,:dx],0,1)
         # ---
         return mean
 
@@ -202,15 +208,23 @@ class PushingDynamics(nn.Module):
             pred_sigma: torch.tensor of shape (N, dx, dx) consisting of covariance matrix of predicted state distribution
 
         """
+        B, D = mu.shape
 
         pred_mu, pred_sigma = None, None
-
+        states  = []
         # --- Your code here
-
-
-
+        for i in range(K):
+          next_mu_i, next_sigma_i = self.propagate_uncertainty_certainty_equivalence(mu,sigma,action)
+          distri = torch.distributions.MultivariateNormal(next_mu_i,next_sigma_i)
+          state_i = distri.sample()
+          states.append(state_i) 
+        
+        states = torch.stack(states,dim=1)
+        pred_mu = torch.mean(states,dim=1)
+        diffs = (states - pred_mu.unsqueeze(1)).reshape(B * K, D)
+        prods = torch.bmm(diffs.unsqueeze(2), diffs.unsqueeze(1)).reshape(B, K, D, D)
+        pred_sigma = prods.sum(dim=1) / (K - 1)  
         # ---
-
         return pred_mu, pred_sigma
 
     def propagate_uncertainty_certainty_equivalence(self, mu, sigma, action):
@@ -226,7 +240,7 @@ class PushingDynamics(nn.Module):
         """
         pred_mu, pred_sigma = None, None
         # --- Your code here
-
+        pred_mu, pred_sigma = self.predict(mu,action)
 
 
         # ---
@@ -261,9 +275,8 @@ class PushingDynamicsGP(PushingDynamics):
         """
         pred = None
         # --- Your code here
-
-
-
+        x = torch.cat((state, action), dim = -1)
+        pred =  self.gp_model(x)
         # ---
         return pred
 
@@ -310,11 +323,11 @@ class PushingDynamicsGP(PushingDynamics):
         """
 
         pred_mu, pred_sigma = None, None
+
         A = self.gp_model.grad_mu(torch.cat((mu, action), dim=-1))[:, :, :2]  # want B x 2 x 2
-
         # --- Your code here
-
-
+        pred_mu, pred_sigma = self.predict(mu,action)
+        pred_sigma = pred_sigma + torch.bmm(torch.bmm(A,sigma),A.transpose(2,1))
 
         # ---
         return pred_mu, pred_sigma
@@ -333,8 +346,13 @@ class ResidualDynamicsModel(nn.Module):
         self.action_dim = action_dim
         # --- Your code here
 
-
-
+        self.layers = nn.Sequential(
+                      nn.Linear(self.state_dim + self.action_dim,128),
+                      nn.ReLU(),
+                      nn.Linear(128,128),
+                      nn.ReLU(),
+                      nn.Linear(128,self.state_dim)
+        )
         # ---
 
     def forward(self, state, action):
@@ -346,9 +364,9 @@ class ResidualDynamicsModel(nn.Module):
         """
         next_state = None
         # --- Your code here
-
-
-
+        dx = torch.cat((state,action),dim=-1)
+        dx = self.layers(dx)
+        next_state = state + dx
         # ---
         return next_state
 
@@ -376,7 +394,7 @@ class DynamicsNNEnsemble(PushingDynamics):
         """
         next_state = None
         # --- Your code here
-
+        next_state = torch.stack([model(state,action) for model in self.models],dim=1)
 
 
         # ---
@@ -399,8 +417,9 @@ class DynamicsNNEnsemble(PushingDynamics):
         """
         pred_mu, pred_sigma = None, None
         # --- Your code here
-
-
+        next_states = self.forward(state,action)
+        pred_mu = torch.mean(next_states,dim=1)
+        pred_sigma = batch_cov(next_states)
 
         # ---
         return pred_mu, pred_sigma
@@ -419,8 +438,22 @@ def train_dynamics_gp_hyperparams(model, likelihood, train_states, train_actions
 
     """
     # --- Your code here
+    training_iter = 500
+    model.train()
+    likelihood.train()
 
+    optimizer = torch.optim.Adam(model.parameters(), lr =lr)
+    loss_func = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood,model.gp_model)
 
+    pbar = tqdm(range(training_iter))
+    for i in tqdm(range(training_iter)):
+      optimizer.zero_grad()
+      output = model(train_states,train_actions)
+      loss_i = -loss_func(output,train_next_states)
+      loss_i.backward()
+      optimizer.step()
+      pbar.set_description('Train Loss: {}'.format(loss_i.item()))
+    # ---
 
     # ---
 
@@ -435,8 +468,11 @@ def free_pushing_cost_function(state, action):
     target_pose = TARGET_POSE_FREE_TENSOR  # torch tensor of shape (3,) containing (pose_x, pose_y, pose_theta)
     cost = None
     # --- Your code here
-
-
+    mu = state[:,:2]
+    sigma = state[:,2:].reshape(-1,2,2)
+    state_error = mu - target_pose[:2]
+    Q = torch.tensor([[1.0,0.0],[0.0,1.0]])
+    cost = torch.sum((state_error @ Q ) * state_error, dim = -1) + torch.sum((sigma @ Q).diagonal(0,1,2),dim=-1)
 
     # ---
     return cost
@@ -457,8 +493,17 @@ def obstacle_avoidance_pushing_cost_function(state, action):
     disk_radius = DISK_RADIUS
     cost = None
     # --- Your code here
+    def in_collision(mu, obstacle):
+      dis = torch.norm(mu-obstacle,dim=-1)
+      return ((dis - obs_radius - disk_radius) < 0).to(dtype=torch.float32)
 
-
+    mu = state[:,:2]
+    sigma = state[:,2:].reshape(-1,2,2)
+    state_error = mu - target_pose[:2]
+    Q = torch.tensor([[1.0,0.0],[0.0,1.0]])
+    cost = torch.sum((state_error @ Q ) * state_error, dim = -1) \
+          + torch.sum((sigma @ Q).diagonal(0,1,2),dim=-1) \
+          + 100*in_collision(mu,obs_centre)
 
     # ---
     return cost
@@ -479,7 +524,25 @@ def obstacle_avoidance_pushing_cost_function_samples(state, action, K=10):
     disk_radius = DISK_RADIUS
     cost = None
     # --- Your code here
+    def in_collision(state, obstacle):
+      dis = torch.norm(state-obstacle,dim=-1)
+      return ((dis - obs_radius - disk_radius) < 0).to(dtype=torch.float32)
+    def in_collision_samples(mu,sigma,obstacle):
+      distri = torch.distributions.MultivariateNormal(mu,sigma)
+      sum_check = 0.0
+      for i in range(K):
+        states = distri.sample()
+        sum_check = sum_check + in_collision(states,obstacle)
+      sum_check = sum_check/ K
+      return sum_check
 
+    mu = state[:,:2]
+    sigma = state[:,2:].reshape(-1,2,2)
+    state_error = mu - target_pose[:2]
+    Q = torch.tensor([[1.0,0.0],[0.0,1.0]])
+    cost = torch.sum((state_error @ Q ) * state_error, dim = -1) \
+          + torch.sum((sigma @ Q).diagonal(0,1,2),dim=-1) \
+          + 100*in_collision_samples(mu,sigma,obs_centre)   
 
 
     # ---
@@ -527,8 +590,10 @@ class PushingController(object):
         """
         next_state = None
         # --- Your code here
-
-
+        mu = state[:,:2]
+        sigma = state[:,2:].reshape(-1,2,2)
+        mu, sigma  = self.model.propagate_uncertainty(mu,sigma,action)
+        next_state = torch.cat((mu, sigma.reshape(-1,2*2)),dim=1)
 
         # ---
         return next_state
@@ -548,14 +613,13 @@ class PushingController(object):
         action = None
         state_tensor = None
         # --- Your code here
-
-
-
+        n = state.shape[-1]
+        state_tensor = torch.from_numpy(np.hstack([state,np.zeros(n*n)])).unsqueeze(0)
         # ---
         action_tensor = self.mppi.command(state_tensor)
         # --- Your code here
 
-
+        action = action_tensor.detach().numpy().squeeze()
 
         # ---
         return action

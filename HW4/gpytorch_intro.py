@@ -13,9 +13,8 @@ class RBF_GP(gpytorch.models.ExactGP):
         self.mean_module = None
         self.covar_module = None
         # --- Your code here
-
-
-
+        self.mean_module = gpytorch.means.ZeroMean()
+        self.covar_module = ScaleKernel(RBFKernel())
         # ---
 
     def forward(self, x):
@@ -30,9 +29,8 @@ class PolynomialGP(gpytorch.models.ExactGP):
         self.mean_module = None
         self.covar_module = None
         # --- Your code here
-
-
-
+        self.mean_module = gpytorch.means.ZeroMean()
+        self.covar_module = ScaleKernel(PolynomialKernel(power=degree))
         # ---
 
     def forward(self, x):
@@ -49,7 +47,8 @@ class LinearCosineGP(gpytorch.models.ExactGP):
         self.covar_module = None
         # --- Your code here
 
-
+        self.mean_module = gpytorch.means.ZeroMean()
+        self.covar_module = ScaleKernel(LinearKernel()+CosineKernel())
 
         # ---
 
@@ -72,9 +71,25 @@ def train_gp_hyperparams(model, likelihood, train_x, train_y, lr):
     """
 
     # --- Your code here
+    training_iter = 50
+    model.train()
+    likelihood.train()
 
+    optimizer = torch.optim.Adam(model.parameters(), lr =lr)
+    loss_func = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood,model)
 
-
+    for i in tqdm.tqdm(range(training_iter)):
+      optimizer.zero_grad()
+      output = model(train_x)
+      loss_i = -loss_func(output,train_y)
+      loss_i.backward()
+      # print('Iter %d/%d - Loss: %.3f   lengthscale: %.3f  outputscale: %.3f  noise: %.3f' % (
+      #   i + 1, training_iter, loss_i.item(),
+      #   model.covar_module.base_kernel.lengthscale.item(),
+      #   model.covar_module.outputscale.item(),
+      #   model.likelihood.noise.item()
+      # ))
+      optimizer.step()
     # ---
 
 

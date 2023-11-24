@@ -4,4 +4,5 @@ This repository contains my solutions for the homework assignments of the ROB 49
 
 To run the solutions, please follow the instructions provided in each assignment's folder. 
 ![](https://github.com/dorecasan/rob498_umich/blob/main/HW3/pushing_visualization_obstacle2.gif)
+![](https://github.com/dorecasan/rob498_umich/blob/main/HW4/pushing_visualization_obstacle.gif)
 
